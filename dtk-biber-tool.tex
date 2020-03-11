@@ -1,0 +1,412 @@
+\documentclass[ngerman]{dtk}
+\addbibresource{\jobname.bib}
+ 
+\usepackage{etoolbox}
+\newrobustcmd\meta[1]{%
+   \normalfont%
+  {\textlangle}%
+  {\itshape#1\/}%
+  {\textrangle}%
+ }
+
+% \newrobustcmd\marg[1]{%
+%   {\ttfamily\{}%
+%    \meta{#1}%
+%   {\ttfamily\}}%
+%   }
+
+% \newrobustcmd\oarg[1]{%
+%   {\ttfamily[}%
+%    \meta{#1}%
+%   {\ttfamily]}%
+%   }
+ 
+\begin{document}
+\title{Mit \texttt{biber --tool} Bibliografieeinträge bearbeiten}
+\Author{Lukas C.}{Bossert}%
+{RWTH Aachen University\\
+IT Center\\
+Seffenter Weg 23\\
+52074 Aachen
+\Email{bossert@itc.rwth-aachen.de}}
+\maketitle
+
+\begin{abstract}
+Es gibt verschiedene Programme, mit denen \texttt{.bib}-Dateien bearbeitet werden können (bspw. JabRef, BibDesk etc.).
+Möchte man hingegen Bibliografieeinträge in einem automatisierten Prozess verändern,
+dann bedarf es eines anderen Werkzeugs.
+
+In diesem Beitrag wird gezeigt, wie mit \texttt{biber} im \texttt{tool}-Modus beliebig große \texttt{.bib}-Dateien bearbeitet werden können.
+\end{abstract}
+Ausgangspunkt meiner Beschäftigung mit \texttt{biber} und dem Werkzeugmodus war ein konkreter Anlass: 
+Ich brauchte fortlaufend aktualisierte Listen mit Publikationen, 
+die innerhalb eines Sonderforschungsbereichs (SFB) entstanden sind.
+Da eine händische Pflege dieser Liste mir deutlich zu aufwendig schien und die Daten über
+die Hochschulbibliografie der Bibliothek ohnehin gepflegt werden,\footnote{\url{https://publications.rwth-aachen.de/record/783071}} wollte ich einen effizienteren Weg gehen.\footnote{Die nachfolgenden Beispiele sind zwar konkrete BibTeX-Einträge, 
+die Vorgehensweise mit \texttt{biber} ist jedoch exemplarisch zu verstehen.}   
+
+Fast alle Bibliothekskataloge bieten die Möglichkeit an, 
+ Bibliografieeinträge im BibTeX-Format zu exportieren.
+Dabei sind die Publikationsmetadaten sehr unterschiedlich
+was bspw. die Ausführlichkeit der Beschreibung oder deren Ausgabe angeht.\footnote{Oft werden noch ``veraltete'' Feldnamen wie \texttt{address} oder \texttt{journal} exportiert.}
+Eine Nachbearbeitung der Metadaten ist daher von Fall zu Fall notwendig. 
+Diese wollte ich aber so automatisiert wie möglich gestalten.
+Genau dafür eignet sich \texttt{biber} hervorragend.
+
+\section{Ausgangslage}
+Dank einer API-gestützten Abfrage konnte ich mir über die Kommandozeile  
+eine \texttt{.bib}-Datei mit allen Publikationen des SFBs herunterladen und als \texttt{sfb.bib} speichern.
+
+\begin{lstlisting}[style=nonumber,language=Bash]
+curl "http://publications.rwth-aachen.de/PubExporter.py?p=pid:G:(GEPRIS)403224013&of=hx" > sfb.bib
+\end{lstlisting}
+Ein willkürlich herausgegriffener Datensatz sieht so aus:
+\begin{lstlisting}[style=number,language=TeX]
+% IMPORTANT: The following is UTF-8 encoded.  This means that in the presence
+% of non-ASCII characters, it will not work with BibTeX 0.99 or older.
+% Instead, you should use an up-to-date BibTeX implementation like “bibtex8” or
+% “biber”.
+
+@ARTICLE{Babbar:782496,
+author       = {Babbar, Anshu and Hitch, Thomas C. A. and others},
+title        = {{T}he {C}ompromised {M}ucosal {I}mmune {S}ystem of β7
+                      {I}ntegrin-{D}eficient {M}ice {H}as {O}nly {M}inor {E}ffects on the {F}ecal {M}icrobiota in {H}omeostasis},
+journal      = {Frontiers in microbiology},
+volume       = {10},
+issn         = {1664-302X},
+address      = {Lausanne},
+publisher    = {Frontiers Media},
+reportid     = {RWTH-2020-01913},
+pages        = {2284},
+year         = {2019},
+cin          = {526000-2 / 525500-2 / 537500-2},
+ddc          = {570},
+cid          = {$I:(DE-82)526000-2_20140620$ / $I:(DE-82)525500-2_20140620$ / $I:(DE-82)537500-2_20140620$},
+pnm          = {SFB 1382 - SFB 1382: Die Darm-Leber-Achse - Funktionelle Zusammenhänge und therapeutische Strategien (403224013)},
+pid          = {G:(GEPRIS)403224013},
+typ          = {PUB:(DE-HGF)16},
+UT           = {WOS:000491333100001},
+doi          = {10.3389/fmicb.2019.02284},
+url          = {https://publications.rwth-aachen.de/record/782496},
+}
+\end{lstlisting} 
+Neben den bereits genannten ``veralteten'' Feldnamen, wie 
+\texttt{address} oder \texttt{journal} gibt es noch weitere Feldnamen,
+die nicht zum BibLaTeX-Format gehören:
+\texttt{reportid}, \texttt{cin}, \texttt{ddc}, \texttt{cid}, \texttt{pnm}, \texttt{pid}, \texttt{UT}.
+Diese Felder werden von BibLaTeX standardmäßig nicht verarbeitet
+und der gewählte Bibliografiestil müsste diese explizit in ein
+eigenes Datenmodell aufnehmen.\footnote{Da es sich bei diesen Feldern um interne Informationen handelt,
+die im Normalfall ohnehin von BibLaTeX ignoriert werden, ist es nur mein eigener ästhetischer Anspruch 
+an die BibTeX-Darstellung, diese Felder zu löschen.}
+Zudem werden alle Großbuchstaben im Titel mit \texttt{\{\}} eingefasst,
+um eine Kleinsetzung zu vermeiden. Diese Großschreibug (Capitalizing)
+ sollte aber nicht aus dem Datensatz heraus erzwungen, sondern vom 
+Bibliografiestil umgesetzt werden.
+
+Die Bearbeitung des Datensatzes mit \texttt{biber} kümmert sich ohne besondere Spezifikation
+um mehrere Punkte.
+Mit ein paar Optionen lassen sich weitere Anpassungen vornehmen: 
+\begin{itemize}
+  \item \texttt{--tool} startet \texttt{biber} im Werkzeugmodus.
+  \item Mit \texttt{--outfile} \meta{FILE.bib} wird eine explizite
+Ausgabedatei angegeben. In unserem Fall ist es derselbe Name der Eingabedatei;
+ansonsten wird \texttt{biber} eine \texttt{.bib}-Datei mit dem Zusatz \texttt{\_bibertool} erstellen.
+  \item \texttt{--output\_align} sorgt für eine ausgerichtete Darstellung der Feldnamen und -inhalte.
+  \item \texttt{--output\_indent} regelt, um wie viele Leerzeichen eingerückt werden soll.
+  \item Über \texttt{--output\_fieldcase=lower} wird angegeben, dass alle Feldnamen und der Datensatztyp kleingeschrieben werden.
+  \item Über \texttt{--output-field-order=}\meta{FELDNAMEN} kann man die interne Reihenfolge der Felder festlegen.
+\end{itemize}
+Am Ende des Befehls steht der Dateiname der zu bearbeitenden \texttt{.bib}-Datei.
+
+\begin{lstlisting}[style=nonumber,language=Bash]
+biber --tool --outfile sfb.bib --output_align --output_indent=1 --output_fieldcase=lower --output-field-order=author,title,date sfb.bib
+\end{lstlisting}
+Das Ergebnis sieht für den Datensatz wie folgt aus:
+\begin{lstlisting}[style=number,language=TeX]
+@article{Babbar:782496,
+ author       = {Babbar, Anshu and Hitch, Thomas C. A. and others},
+ title        = {{T}he {C}ompromised {M}ucosal {I}mmune {S}ystem of β7 {I}ntegrin-{D}eficient {M}ice {H}as {O}nly {M}inor {E}ffects on the {F}ecal {M}icrobiota in {H}omeostasis},
+ date         = {2019},
+ doi          = {10.3389/fmicb.2019.02284},
+ issn         = {1664-302X},
+ journaltitle = {Frontiers in microbiology},
+ location     = {Lausanne},
+ pages        = {2284},
+ publisher    = {Frontiers Media},
+ url          = {https://publications.rwth-aachen.de/record/782496},
+ volume       = {10},
+}
+\end{lstlisting}
+Alle BibLaTeX nicht bekannten Feldnamen werden mit ihren Inhalten gelöscht.
+Die ``veralteten'' Feldnamen werden umbenannt (zu \texttt{location} und \texttt{journaltitle}).
+Und der Kommentar über dem Eintrag wird ebenfalls entfernt.
+Die ersten drei Felder werden wie gewünscht sortiert: \texttt{author}, \texttt{title}, \texttt{date}, der Rest
+wird alphabetisch angeordnet.
+
+\section{Eigene Modifikationen einbauen}
+Der Datensatz ist an sich BibLaTeX-kompatibel, aber in meinem konkreten Fall 
+mussten zusätzlich mehrere Punkte 
+an die eigenen Bedürfnisse und Vorgaben angepasst werden:
+\begin{itemize}
+\item Die Einklammerung der Großbuchstaben im Titel störte noch beim Lesen;
+\item Das Feld \texttt{issn} war für alle Datensatztypen nicht notwendig;
+\item Die Ortsangabe (\texttt{location}) sollte nur für \texttt{@article} gelöscht werden;
+\item Für interne Zwecke musste das Feld \texttt{reportid} jedoch erhalten bleiben.
+\item Wenn im Feld \texttt{pnm} die DFG-Fördernummer geschrieben steht, musste
+\begin{itemize}
+\item in das Feld \texttt{keywords} \emph{CRC1382} nachgetragen und
+\item der Name des SFBs in das Feld \texttt{note} werden.
+\end{itemize}
+\end{itemize}
+Diese weiteren Bearbeitungswünsche sind an sich problemlos umzusetzen,
+müssen jedoch in einer extern gespeicherten Konfigurationsdatei definiert werden.
+
+
+Die Konfigurationsdatei (\texttt{sfb-configuration.conf}) basiert auf \texttt{xml}. Das Grundgerüst, das für die Anpassungen notwendig war, sieht so aus:
+\begin{lstlisting}[style=number,language=xml]
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    ... <!-- Anpassungen -->
+    <sourcemap>
+    ... <!-- Anpassungen -->
+    </sourcemap>
+    <datamodel>
+        <fields>
+    ... <!-- Anpassungen -->
+        </fields>
+        <entryfields>
+    ... <!-- Anpassungen -->
+        </entryfields>
+    </datamodel>
+</config>
+\end{lstlisting}
+Da mit weiteren Anpassungen ohnehin eine Konfigurationsdatei benötigt wurde,
+konnten einige Anweisungen, die ansonsten in der Kommandozeile eingegeben werden, auslagert werden.
+Diese werden direkt unterhalb des Tags \texttt{<config>} eingegeben:
+\begin{lstlisting}[style=nonumber,language=xml]
+    <output_fieldcase>lower</output_fieldcase>
+    <output_indent>1</output_indent>
+    <output_align>true</output_align>
+\end{lstlisting}
+
+Die nächste Anpassung erfolgt in der Umgebung \texttt{<sourcemap>}.
+In \texttt{<sourcemap>} wird, vereinfacht gesagt, 
+ein  ``Suchen-Ersetzen''-Prinzip (nach bestimmten Bedingungen) ausgeführt.
+In der Standardkonfigurationsdatei\footnote{\url{https://github.com/plk/biber/blob/master/data/biber-tool.conf}} gibt es 
+ebenfalls eine \texttt{<sourcemap>}-Umgebung, die unter anderem die 
+Umbenennung der ``veralteten'' Feldnamen auslöst.
+Damit diese wichtige Anpassung nicht verloren geht,
+müssen alle Zeilen aus dieser originalen \texttt{<sourcemap>}-Umgebung\footnote{\url{https://github.com/plk/biber/blob/bee5567eb70e86c22bbfb7696612fd9ec2146eb2/data/biber-tool.conf#L321-L352}} in die
+eigene Konfigurationsdatei kopiert werden:
+\begin{lstlisting}[style=number,language=xml]
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+ <output_fieldcase>lower</output_fieldcase>
+ <output_indent>2</output_indent>
+ <output_align>true</output_align>
+ <sourcemap>
+ <!-- original sourcemap from biber-tool.conf -->
+ <maps datatype="bibtex">
+  <map>
+  <map_step map_type_source="conference" map_type_target="inproceedings"/>
+  <map_step map_type_source="electronic" map_type_target="online"/>
+  <map_step map_type_source="www" map_type_target="online"/>
+  </map>
+  <map map_overwrite="1">
+  <map_step map_final="1" map_type_source="mastersthesis" map_type_target="thesis"/>
+  <map_step map_field_set="type" map_field_value="mathesis"/>
+  </map>
+  <map map_overwrite="1">
+  <map_step map_final="1" map_type_source="phdthesis" map_type_target="thesis"/>
+  <map_step map_field_set="type" map_field_value="phdthesis"/>
+  </map>
+  <map map_overwrite="1">
+  <map_step map_final="1" map_type_source="techreport" map_type_target="report"/>
+  <map_step map_field_set="type" map_field_value="techreport"/>
+  </map>
+  <map>
+  <map_step map_field_source="address" map_field_target="location"/>
+  <map_step map_field_source="school" map_field_target="institution"/>
+  <map_step map_field_source="annote" map_field_target="annotation"/>
+  <map_step map_field_source="journal" map_field_target="journaltitle"/>
+  <map_step map_field_source="archiveprefix" map_field_target="eprinttype"/>
+  <map_step map_field_source="primaryclass" map_field_target="eprintclass"/>
+  <map_step map_field_source="key" map_field_target="sortkey"/>
+  <map_step map_field_source="pdf" map_field_target="file"/>
+  </map>
+ </maps>
+ </sourcemap>
+ <datamodel>
+ <fields>
+ ... <!-- Anpassungen -->
+ </fields>
+ <entryfields>
+ ... <!-- Anpassungen -->
+ </entryfields>
+ </datamodel>
+</config>
+\end{lstlisting}
+In \texttt{<sourcemap>} werden die Anpassungen 
+in einzelnen Schritten nacheinander ausgeführt (\texttt{<map\_step ... />}) und
+zu größeren Einheiten gebündelt (\texttt{<map>...</map>} bzw. \texttt{<maps>...</maps>}).
+
+An der Umbenennung von \texttt{address} zu \texttt{location} sieht man die Funktionsweise.
+\begin{lstlisting}[style=nonumber,language=xml]
+<map_step map_field_source="address" map_field_target="location"/>
+\end{lstlisting}
+In einem Bearbeitungsschritt wird innerhalb eines Datensatzes (\texttt{@article}, \texttt{@book} etc.) nach dem Feldnamen \texttt{address} gesucht (\texttt{map\_field\_source}) und durch den Inhalt
+von \texttt{map\_field\_target} ersetzt (\texttt{location}).
+
+Auf diese Weise lassen sich Feldnamen ändern. 
+Feldinhalte, wie bspw. Titel, werden nachfolgend
+am Beispiel der erzwungenen Großschreibung gezeigt.
+\begin{lstlisting}[style=nonumber,language=xml]
+<map_step map_field_source="title" map_match="{([A-Z])}" map_replace="$1"/>
+\end{lstlisting}
+Es wird ausschließlich das Feld \texttt{title} berücksichtigt (\texttt{map\_field\_source}).
+Darin wird nach einem Großbuchstaben innerhalb eines geschweiften Klammerpaares gesucht 
+(\texttt{map\_match="{([A-Z])}"}). Für die Suche können Reguläre Ausdrücke verwendet
+ werden,\footnote{\url{https://de.wikipedia.org/wiki/Regulärer_Ausdruck}}
+wie es auch mit \texttt{[A-Z]} (jeder Großbuchstabe von A bis Z) gemacht wird.
+Der Inhalt vom Klammerpaar \texttt{()} wird zwischengespeichert und bei \texttt{map\_replace} mit 
+\texttt{\$1} wieder ausgegeben.
+
+In einem nächsten Schritt soll für alle \texttt{@article}-Einträge das Feld \texttt{location} gelöscht werden:
+\begin{lstlisting}[style=nonumber,language=xml]
+<per_type>article</per_type>
+<map_step map_field_set="location" map_null="1"/>
+\end{lstlisting}
+Über \texttt{<per\_type>}\meta{Datensatztyp}\texttt{</per\_type>} wird festgelegt, 
+dass die nachfolgenden Schritte nur für den gewählten 
+Datensatztyp \texttt{article} gelten. 
+Mit \texttt{map\_null="1"} wird das Feld \texttt{location} gelöscht.
+Ganz analog wird auch das Feld \texttt{issn} gelöscht, nur dass in diesem Schritt
+keine Einschränkung hinsichtlich des Datensatztyps erfolgt.
+
+Was jetzt noch fehlt, sind die Anpassungen, die nur bei bestimmten Kriterien ausgeführt werden dürfen. 
+Zunächst muss geprüft werden, ob im Feld \texttt{pnm} die DFG-Fördernummer (hier: \texttt{403224013}) steht.
+\begin{lstlisting}[style=nonumber,language=xml]
+<map_step map_field_source="pnm" map_final="1" map_match="\(403224013\)"/>
+\end{lstlisting}
+Wenn diese Bedingung nicht erfüllt ist, dann werden wegen \texttt{map\_final="1"} 
+die nachfolgenden Schritte nicht ausgeführt.
+Wenn die Bedingung jedoch erfüllt ist, dann soll zunächst ein Keyword gesetzt 
+\begin{lstlisting}[style=nonumber,language=xml]
+<map_step map_append="1" map_field_set="keywords" map_field_value=", CRC1382"/>
+\end{lstlisting}
+ und anschließend der vollständige Name des SFBs in das Feld \texttt{note} geschrieben werden.
+\begin{lstlisting}[style=nonumber,language=xml]
+<map_step map_field_set="note" map_field_value="SFB 1382: Die Darm-Leber-Achse -- Funktionelle Zusammenhänge und therapeutische Strategien (403224013)"/>
+\end{lstlisting}
+Man kann also durchaus auch komplexere Anpassungen vornehmen, die auf bedingten Anweisungen beruhen.
+
+
+Der Block mit den eigenen Anpassungen sieht insgesamt wie folgt aus:\footnote{Weitere Beispiele gibt es in Kapitel 3.13 in der Dokumentation von \cite{biber}.}
+\begin{lstlisting}[style=number,language=xml]
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+ ...
+ <sourcemap>
+ <!-- original sourcemap from biber-tool.conf -->
+ <maps datatype="bibtex">
+ ... 
+ </maps>
+ <!-- additional configurations -->
+ <maps datatype="bibtex">
+  <map>
+  <!-- In the title get rid off curly brackets -->
+  <map_step map_field_source="title" map_match="{([A-Z])}" map_replace="$1"/>
+  </map>
+  <map>
+  <!-- delete 'location' but only for @article -->
+  <per_type>article</per_type>
+  <map_step map_field_set="location" map_null="1"/>
+  </map>
+  <map>
+  <!-- drop these fields -->
+  <map_step map_field_set="issn" map_null="1"/>
+  </map>
+  <map map_overwrite="1">
+  <!-- execute steps only if first step is true -->
+  <map_step map_field_source="pnm" map_final="1" map_match="\(403224013\)"/>
+  <!-- append 'CRC1382' to 'keywords' -->
+  <map_step map_append="1" map_field_set="keywords" map_field_value=", CRC1382"/>
+  <!-- write SFB name into field 'note' -->
+  <map_step map_field_set="note" map_field_value="SFB 1382: Die Darm-Leber-Achse -- Funktionelle Zusammenhänge und therapeutische Strategien (403224013)"/>
+  </map>
+ </maps>
+ </sourcemap>
+ <datamodel>
+ <fields>
+ ... <!-- Anpassungen -->
+ </fields>
+ <entryfields>
+ ... <!-- Anpassungen -->
+ </entryfields>
+ </datamodel>
+</config>
+\end{lstlisting}
+Die letzten beiden notwendigen Anpassungen betreffen das Feld \texttt{reportid}, das erhalten bleiben soll.
+Hierfür wird zuerst in der \texttt{<fields>}-Umgebung das Feld an sich definiert.
+\begin{lstlisting}[style=nonumber,language=xml]
+<field datatype="literal" fieldtype="field">reportid</field>
+\end{lstlisting}
+In der \texttt{<entryfields>}-Umgebung wird nochmals der Feldname aufgeführt:
+\begin{lstlisting}[style=nonumber,language=xml]
+<field>reportid</field>
+\end{lstlisting}
+Wiederum im Gesamtzusammenhang:
+\begin{lstlisting}[style=number,language=xml]
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+        ...
+    <sourcemap>
+        ...
+    </sourcemap>
+    <datamodel>
+        <fields>
+            <!-- do not drop these fields -->
+            <field datatype="literal" fieldtype="field">reportid</field>
+        </fields>
+        <entryfields>
+            <!-- do not drop these fields -->
+            <field>reportid</field>
+        </entryfields>
+    </datamodel>
+</config>
+\end{lstlisting}
+
+Der  Befehl für die Kommandozeile muss modifiziert werden, 
+indem mit \texttt{--configfile=sfb-configuration.conf} 
+die Konfigurationsdatei geladen wird.
+\begin{lstlisting}[style=nonumber,language=bash]
+biber --tool --outfile sfb.bib --output-field-order=author,title,date --configfile=sfb-configuration.conf sfb.bib
+\end{lstlisting}
+Der Eintrag ist nun entsprechend gesäubert und nach den eigenen Wünschen angepasst:
+\begin{lstlisting}[style=number,language=TeX]
+@article{Babbar:782496,
+  author       = {Babbar, Anshu and Hitch, Thomas C. A. and others},
+  title        = {The Compromised Mucosal Immune System of β7 Integrin-Deficient Mice Has Only Minor Effects on the Fecal Microbiota in Homeostasis},
+  date         = {2019},
+  doi          = {10.3389/fmicb.2019.02284},
+  journaltitle = {Frontiers in microbiology},
+  keywords     = {,CRC1382},
+  note         = {SFB 1382: Die Darm-Leber-Achse -- Funktionelle Zusammenhänge und therapeutische Strategien (403224013)},
+  pages        = {2284},
+  publisher    = {Frontiers Media},
+  reportid     = {RWTH-2020-01913},
+  url          = {https://publications.rwth-aachen.de/record/782496},
+  volume       = {10},
+}
+\end{lstlisting}
+
+\section{Fazit}
+Es wurde gezeigt, wie man über den Werkzeugmodus von \texttt{biber} beliebig viele Bibliografieeinträge nach eigenen Wünschen und Vorgaben bearbeiten kann.
+Dabei lässt sich der Prozess über die Kommandozeile steuern, sodass dies in einen vollautomatisierten Ablauf eingebunden werden kann, 
+der sich vom Abrufen der Daten aus einem OPAC, über die Bereinigung und Anpassung bis zur Erstellung von Publikationslisten kümmert und darüber hinaus die Daten auf einen Server lädt,
+um sie mit einer Instanz von \emph{bibtex-browser}\footnote{\url{https://www.monperrus.net/martin/bibtexbrowser/}} darzustellen.
+\section{Acknowledgments}
+``DFG (German Research Foundation) -- Project-ID 403224013 -- SFB 1382''
+ \printbibliography
+\end{document}
