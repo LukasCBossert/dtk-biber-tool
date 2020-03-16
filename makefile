@@ -32,10 +32,11 @@ $(NAME).bib:
 
 
 # zip files up for sending etc.
-zip: $(NAME).pdf $(PAKET).pdf
+zip: 
+	$(MAKE) all
 	rm -f $(NAME)*.zip
 	mkdir $(TDIR)
-	cp $(NAME).{tex,pdf,bib} $(PAKET).dtx README.md makefile $(TDIR)
+	cp $(NAME).{tex,pdf,bib} makefile $(TDIR)
 	cd $(TEMP); zip -Drq $(PWD)/$(NAME)-$(VERS).zip $(NAME)
 	$(echoPROJECT) "* files zipped * $(NC)"
 
